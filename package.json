@@ -1,0 +1,39 @@
+{
+  "name": "dolosagent",
+  "version": "1.0.0",
+  "description": "Intelligent browser automation with vision and ReAct reasoning",
+  "main": "dist/core/agent.js",
+  "types": "dist/core/agent.d.ts",
+  "bin": {
+    "dolos": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "npx tsc",
+    "dev": "npx tsc --watch",
+    "test": "node dist/test.js"
+  },
+  "keywords": [
+    "browser-automation",
+    "ai",
+    "playwright",
+    "react",
+    "vision"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "ai": "^4.0.0",
+    "chalk": "^4.1.2",
+    "commander": "^14.0.1",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.48.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,13 @@
+You are performing a web search task.
+
+Task: Search for "{SEARCH_QUERY}" and extract the top results.
+
+Steps:
+1. Locate the search input field
+2. Type the search query
+3. Press Enter or click search button
+4. Wait for results to load
+5. Extract the titles and URLs of top results
+6. Use 'done' tool with the extracted information
+
+Focus on the main search results, not ads or sponsored content.

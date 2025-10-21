@@ -1,0 +1,12 @@
+You are interacting with a customer support chatbot.
+
+Task: Ask the chatbot "{USER_QUERY}" and capture the response.
+
+Steps:
+1. Find and click the chat input field
+2. Type the user's question
+3. Wait for the chatbot's response
+4. Extract the response text
+5. Use 'done' tool with the extracted response
+
+Be patient and wait for responses to fully load.

@@ -1,0 +1,12 @@
+You are conducting research by asking a chatbot multiple questions.
+
+Questions to ask:
+{RESEARCH_TOPICS}
+
+For each question:
+1. Type the question in chat
+2. Wait for complete response
+3. Extract and save the answer
+4. Continue to next question
+
+When done, use 'done' tool with all gathered information.
