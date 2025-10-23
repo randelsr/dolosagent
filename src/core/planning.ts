@@ -13,7 +13,7 @@ export class PlanningEngine {
     private memory: Memory
   ) {}
 
-  async executePlanningPhase(observation: BrowserState, stepNumber: number, currentTask?: string): Promise<void> {
+  async executePlanningPhase(observation: BrowserState, stepNumber: number, currentTask?: string): Promise<{ inputTokens: number; outputTokens: number; totalTokens: number }> {
     logger.debugHeader('PLANNING PHASE');
 
     const recentActions = this.memory.getRecentActions(5);
@@ -42,16 +42,31 @@ export class PlanningEngine {
 
     logger.debug(`Sending to planning:\n${detailedActionLog.substring(0, 500)}...`);
 
+    // Build visible elements summary
+    const visibleElements = observation.elements.filter(el => el.isVisible);
+    const elementsSummary = visibleElements.length > 0
+      ? visibleElements.slice(0, 10).map((el, idx) => {
+          const text = el.text || el.placeholder || el.ariaLabel || '';
+          return `  ${idx + 1}. ${el.tag} at (${el.x}, ${el.y})${text ? ` - "${text.substring(0, 50)}"` : ''}`;
+        }).join('\n')
+      : '  (No visible interactive elements detected)';
+
     const planningPrompt = `
 You are at step ${stepNumber}. Reflect on your progress:${taskContext}
 
 Current Page: ${observation.title} (${observation.url})
 
+CURRENT PAGE STATE:
+Screenshot: [See attached image showing current page appearance]
+Viewport: ${observation.viewportSize.width}x${observation.viewportSize.height}
+Visible Interactive Elements (${visibleElements.length} total, showing top 10):
+${elementsSummary}
+
 RECENT ACTION HISTORY (last ${recentActions.length} steps):
 ${detailedActionLog}
 
-Based on this complete history with results, provide:
-1. FACTS: What you know to be true right now (include what actions succeeded/failed)
+Based on the CURRENT PAGE STATE (visible in the screenshot) and complete action history with results, provide:
+1. FACTS: What you know to be true right now based on what you can SEE in the screenshot and what actions succeeded/failed
 2. NEXT STEPS: What you should do in the next few actions
 3. CONTINUE: yes/no - should you keep going?
 
@@ -66,8 +81,14 @@ CONTINUE: yes/no
 `;
 
     const result = await this.aiClient.generate({
-      messages: [{ role: 'user', content: planningPrompt }],
-      system: 'You are a planning assistant for a browser automation agent.',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: planningPrompt },
+          { type: 'image', image: observation.screenshot, mimeType: 'image/png' }
+        ]
+      }],
+      system: 'You are a planning assistant for a browser automation agent. Use the screenshot to understand the current page state.',
       maxSteps: 1
     });
 
@@ -83,6 +104,9 @@ CONTINUE: yes/no
       currentFacts: facts,
       nextSteps
     });
+
+    // Return token usage for aggregation
+    return result.usage;
   }
 
   private extractSection(text: string, section: string): string[] {

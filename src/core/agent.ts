@@ -24,6 +24,8 @@ export class DolosAgent {
   private config: AgentConfig;
   private stepCount: number = 0;
   private totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  private logicUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  private visionUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   private planningEngine?: PlanningEngine;
   private loopDetector: LoopDetector;
   private lastStateHash?: string;
@@ -135,7 +137,18 @@ export class DolosAgent {
 
       // PLANNING PHASE (if interval reached)
       if (this.stepCount % this.config.planningInterval! === 0 && this.planningEngine) {
-        await this.planningEngine.executePlanningPhase(observation, this.stepCount, task);
+        const planningUsage = await this.planningEngine.executePlanningPhase(observation, this.stepCount, task);
+
+        // Planning always uses vision (includes screenshot)
+        this.visionUsage.inputTokens += planningUsage.inputTokens;
+        this.visionUsage.outputTokens += planningUsage.outputTokens;
+        this.visionUsage.totalTokens += planningUsage.totalTokens;
+
+        this.totalUsage.inputTokens += planningUsage.inputTokens;
+        this.totalUsage.outputTokens += planningUsage.outputTokens;
+        this.totalUsage.totalTokens += planningUsage.totalTokens;
+
+        logger.info(`Planning Tokens - Logic: 0 (total: ${this.logicUsage.totalTokens}) | Vision: ${planningUsage.totalTokens} (total: ${this.visionUsage.totalTokens})`);
       }
 
       // LOOP DETECTION
@@ -205,12 +218,29 @@ export class DolosAgent {
       }
       logger.traceSeparator();
 
-      // Track usage
+      // Track usage - determine if this was a vision or logic call
+      const isVisionCall = activeClient === this.visionClient;
+
+      let logicTokensThisStep = 0;
+      let visionTokensThisStep = 0;
+
+      if (isVisionCall) {
+        visionTokensThisStep = result.usage.totalTokens;
+        this.visionUsage.inputTokens += result.usage.inputTokens;
+        this.visionUsage.outputTokens += result.usage.outputTokens;
+        this.visionUsage.totalTokens += result.usage.totalTokens;
+      } else {
+        logicTokensThisStep = result.usage.totalTokens;
+        this.logicUsage.inputTokens += result.usage.inputTokens;
+        this.logicUsage.outputTokens += result.usage.outputTokens;
+        this.logicUsage.totalTokens += result.usage.totalTokens;
+      }
+
       this.totalUsage.inputTokens += result.usage.inputTokens;
       this.totalUsage.outputTokens += result.usage.outputTokens;
       this.totalUsage.totalTokens += result.usage.totalTokens;
 
-      logger.info(`Tokens: ${result.usage.totalTokens} (total: ${this.totalUsage.totalTokens})`);
+      logger.info(`Tokens - Logic: ${logicTokensThisStep} (total: ${this.logicUsage.totalTokens}) | Vision: ${visionTokensThisStep} (total: ${this.visionUsage.totalTokens})`);
 
       // Check if done
       if (result.finishReason === 'stop' && result.text) {
@@ -263,6 +293,8 @@ export class DolosAgent {
 
     logger.successHeader('FINAL RESULT');
     logger.success(`Answer: ${finalAnswer}`);
+    logger.info(`Logic Tokens: ${this.logicUsage.totalTokens.toLocaleString()}`);
+    logger.info(`Vision Tokens: ${this.visionUsage.totalTokens.toLocaleString()}`);
     logger.info(`Total Tokens Used: ${this.totalUsage.totalTokens.toLocaleString()}`);
     logger.separator();
 

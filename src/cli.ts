@@ -90,6 +90,7 @@ program
 program
   .command('chat')
   .description('Start conversational mode for continuous interaction')
+  .option('-t, --task <task>', 'Initial task to execute before starting conversation')
   .option('-u, --url <url>', 'Starting URL')
   .option('--provider <provider>', 'LLM provider (openai, anthropic, google)', process.env.DEFAULT_PROVIDER || 'openai')
   .option('--model <model>', 'LLM model name', process.env.DEFAULT_MODEL)
@@ -133,7 +134,7 @@ program
 
       // Create and start conversational agent
       const agent = new ConversationalAgent(config);
-      await agent.startConversation(options.url);
+      await agent.startConversation(options.url, options.task);
 
       process.exit(0);
     } catch (error: any) {
