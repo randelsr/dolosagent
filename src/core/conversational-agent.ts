@@ -15,11 +15,22 @@ export class ConversationalAgent extends DolosAgent {
     super(config);
   }
 
-  async startConversation(initialUrl?: string): Promise<void> {
+  async startConversation(initialUrl?: string, initialTask?: string): Promise<void> {
     await this.initialize();
 
     if (initialUrl) {
       await this.getPage().goto(initialUrl);
+    }
+
+    // Execute initial task if provided
+    if (initialTask) {
+      try {
+        logger.info('\nWorking...\n');
+        const result = await this.run(initialTask);
+        logger.success(`\n${result}`);
+      } catch (error: any) {
+        logger.error(`\nError: ${error.message}`);
+      }
     }
 
     this.conversationActive = true;
