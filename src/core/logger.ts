@@ -25,6 +25,10 @@ export class Logger {
     this.level = level;
   }
 
+  getLevel(): VerbosityLevel {
+    return this.level;
+  }
+
   private shouldLog(level: VerbosityLevel): boolean {
     return VERBOSITY_LEVELS[level] <= VERBOSITY_LEVELS[this.level];
   }

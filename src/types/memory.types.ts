@@ -5,7 +5,7 @@
 import { BrowserState } from './agent.types';
 
 export interface MemoryStep {
-  type: 'task' | 'action' | 'planning';
+  type: 'task' | 'action' | 'planning' | 'vision-analysis';
   timestamp: number;
 }
 
@@ -36,7 +36,14 @@ export interface PlanningStep extends MemoryStep {
   nextSteps: string[];
 }
 
-export type AnyMemoryStep = TaskStep | ActionStep | PlanningStep;
+export interface VisionAnalysisStep extends MemoryStep {
+  type: 'vision-analysis';
+  stepNumber: number;
+  analysis: string;
+  observation: BrowserState;
+}
+
+export type AnyMemoryStep = TaskStep | ActionStep | PlanningStep | VisionAnalysisStep;
 
 export interface MemoryJSON {
   steps: AnyMemoryStep[];

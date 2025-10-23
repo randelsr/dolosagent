@@ -57,7 +57,6 @@ You are at step ${stepNumber}. Reflect on your progress:${taskContext}
 Current Page: ${observation.title} (${observation.url})
 
 CURRENT PAGE STATE:
-Screenshot: [See attached image showing current page appearance]
 Viewport: ${observation.viewportSize.width}x${observation.viewportSize.height}
 Visible Interactive Elements (${visibleElements.length} total, showing top 10):
 ${elementsSummary}
@@ -65,8 +64,8 @@ ${elementsSummary}
 RECENT ACTION HISTORY (last ${recentActions.length} steps):
 ${detailedActionLog}
 
-Based on the CURRENT PAGE STATE (visible in the screenshot) and complete action history with results, provide:
-1. FACTS: What you know to be true right now based on what you can SEE in the screenshot and what actions succeeded/failed
+Based on the CURRENT PAGE STATE and complete action history with results, provide:
+1. FACTS: What you know to be true right now based on the action history and what actions succeeded/failed
 2. NEXT STEPS: What you should do in the next few actions
 3. CONTINUE: yes/no - should you keep going?
 
@@ -80,15 +79,12 @@ NEXT STEPS:
 CONTINUE: yes/no
 `;
 
+    // Planning always uses logic client (text-only, no screenshot)
+    logger.debug('Using logic client for planning (text-only)');
+
     const result = await this.aiClient.generate({
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: planningPrompt },
-          { type: 'image', image: observation.screenshot, mimeType: 'image/png' }
-        ]
-      }],
-      system: 'You are a planning assistant for a browser automation agent. Use the screenshot to understand the current page state.',
+      messages: [{ role: 'user', content: planningPrompt }],
+      system: 'You are a planning assistant for a browser automation agent. Analyze the action history and page state information to plan next steps.',
       maxSteps: 1
     });
 

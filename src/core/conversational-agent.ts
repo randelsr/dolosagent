@@ -19,7 +19,10 @@ export class ConversationalAgent extends DolosAgent {
     await this.initialize();
 
     if (initialUrl) {
-      await this.getPage().goto(initialUrl);
+      logger.info(`Navigating to initial URL: ${initialUrl}`);
+      await this.getPage().goto(initialUrl, { waitUntil: 'networkidle' });
+      logger.debug(`  Network wait: ${this.getConfig().networkWait}ms after initial navigation`);
+      await this.getPage().waitForTimeout(this.getConfig().networkWait!);
     }
 
     // Execute initial task if provided
@@ -127,7 +130,10 @@ export class ConversationalAgent extends DolosAgent {
     (memory as any).steps = snapshot.memory.steps;
 
     // Navigate to saved URL
-    await this.getPage().goto(snapshot.url);
+    logger.info(`Restoring URL: ${snapshot.url}`);
+    await this.getPage().goto(snapshot.url, { waitUntil: 'networkidle' });
+    logger.debug(`  Network wait: ${this.getConfig().networkWait}ms after snapshot restoration`);
+    await this.getPage().waitForTimeout(this.getConfig().networkWait!);
 
     logger.success(`Loaded: ${filename} (${snapshot.memory.steps.length} steps)`);
   }
@@ -139,5 +145,9 @@ export class ConversationalAgent extends DolosAgent {
 
   private getMemory() {
     return (this as any).memory;
+  }
+
+  private getConfig() {
+    return (this as any).config;
   }
 }
