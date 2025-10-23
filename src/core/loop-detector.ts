@@ -24,7 +24,7 @@ export class LoopDetector {
     if (repetitionCount >= this.maxRepetitions) {
       return {
         isLooping: true,
-        message: `⚠️ LOOP DETECTED: Repeated ${lastAction.toolName} ${repetitionCount} times. Try a different approach!`
+        message: `LOOP DETECTED: Repeated ${lastAction.toolName} ${repetitionCount} times. Try a different approach!`
       };
     }
 

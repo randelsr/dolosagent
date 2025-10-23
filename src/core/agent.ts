@@ -38,6 +38,7 @@ export class DolosAgent {
       viewport: { width: 1280, height: 720 },
       headless: false,
       typingDelay: 50,
+      networkWait: 2000,
       verbosity: 'info',
       ...config
     };
@@ -45,23 +46,33 @@ export class DolosAgent {
     // Set logger verbosity
     logger.setLevel(this.config.verbosity!);
 
+    // STRICT REQUIREMENT: Both logic and vision clients must be configured
+    if (!config.imageModel || !config.imageProvider) {
+      throw new Error(
+        'Vision LLM must be configured. Two-phase architecture requires both:\n' +
+        '  - Logic LLM (provider, model) for decision-making and planning\n' +
+        '  - Vision LLM (imageProvider, imageModel) for screenshot analysis\n\n' +
+        'Please set imageProvider and imageModel in your configuration or .env file:\n' +
+        '  DEFAULT_IMAGE_PROVIDER=openai\n' +
+        '  DEFAULT_IMAGE_MODEL=gpt-4o'
+      );
+    }
+
     this.memory = new Memory();
 
-    // Main AI client
+    // Logic client (required)
     this.aiClient = new AIClient({
       provider: config.provider,
       apiKey: config.apiKey!,
       model: config.model
     });
 
-    // Optional separate vision client
-    if (config.imageModel && config.imageProvider) {
-      this.visionClient = AIClient.createVisionClient({
-        provider: config.imageProvider,
-        apiKey: config.imageApiKey || config.apiKey!,
-        model: config.imageModel
-      });
-    }
+    // Vision client (required)
+    this.visionClient = AIClient.createVisionClient({
+      provider: config.imageProvider,
+      apiKey: config.imageApiKey || config.apiKey!,
+      model: config.imageModel
+    });
 
     this.tools = new ToolRegistry();
     this.loopDetector = new LoopDetector();
@@ -87,7 +98,7 @@ export class DolosAgent {
     // Register browser tools (Phase 2)
     await this.registerBrowserTools();
 
-    // Initialize planning engine (Phase 4)
+    // Initialize planning engine with logic client only
     this.planningEngine = new PlanningEngine(this.aiClient, this.memory);
 
     logger.success('Agent initialized');
@@ -101,7 +112,10 @@ export class DolosAgent {
 
     // Navigate to start URL if provided
     if (startUrl) {
-      await this.page.goto(startUrl);
+      logger.info(`Navigating to initial URL: ${startUrl}`);
+      await this.page.goto(startUrl, { waitUntil: 'networkidle' });
+      logger.debug(`  Network wait: ${this.config.networkWait}ms after initial navigation`);
+      await this.page.waitForTimeout(this.config.networkWait!);
     }
 
     // Add task to memory
@@ -139,16 +153,16 @@ export class DolosAgent {
       if (this.stepCount % this.config.planningInterval! === 0 && this.planningEngine) {
         const planningUsage = await this.planningEngine.executePlanningPhase(observation, this.stepCount, task);
 
-        // Planning always uses vision (includes screenshot)
-        this.visionUsage.inputTokens += planningUsage.inputTokens;
-        this.visionUsage.outputTokens += planningUsage.outputTokens;
-        this.visionUsage.totalTokens += planningUsage.totalTokens;
+        // Planning always uses logic client (text-only)
+        this.logicUsage.inputTokens += planningUsage.inputTokens;
+        this.logicUsage.outputTokens += planningUsage.outputTokens;
+        this.logicUsage.totalTokens += planningUsage.totalTokens;
 
         this.totalUsage.inputTokens += planningUsage.inputTokens;
         this.totalUsage.outputTokens += planningUsage.outputTokens;
         this.totalUsage.totalTokens += planningUsage.totalTokens;
 
-        logger.info(`Planning Tokens - Logic: 0 (total: ${this.logicUsage.totalTokens}) | Vision: ${planningUsage.totalTokens} (total: ${this.visionUsage.totalTokens})`);
+        logger.info(`Planning Tokens - Logic: ${planningUsage.totalTokens} (total: ${this.logicUsage.totalTokens}) | Vision: 0 (total: ${this.visionUsage.totalTokens})`);
       }
 
       // LOOP DETECTION
@@ -157,90 +171,64 @@ export class DolosAgent {
         console.warn(loopCheck.message);
       }
 
-      // Build messages with observation (include state change info)
-      const messages = this.buildMessages(observation, task, stateChanged);
+      // ============================================================
+      // PHASE 1: VISION ANALYSIS (required)
+      // ============================================================
+      logger.debugHeader('VISION ANALYSIS PHASE');
 
-      // LOG: Full user prompt being sent to LLM
-      logger.traceHeader('SENDING TO LLM');
-      logger.trace('SYSTEM PROMPT:');
-      logger.trace(this.memory.systemPrompt.substring(0, 500) + '...\n');
-      logger.trace('USER MESSAGES:');
-      messages.forEach((msg, idx) => {
-        logger.trace(`\nMessage ${idx + 1} [${msg.role}]:`);
-        if (Array.isArray(msg.content)) {
-          msg.content.forEach((item: any) => {
-            if (item.type === 'text') {
-              logger.trace(`  TEXT: ${item.text.substring(0, 300)}...`);
-            } else if (item.type === 'image') {
-              logger.trace(`  IMAGE: [base64 screenshot, ${item.image.length} bytes]`);
-            } else if (item.type === 'tool-call') {
-              logger.trace(`  TOOL-CALL: ${item.toolName}(${JSON.stringify(item.args).substring(0, 100)})`);
-            } else if (item.type === 'tool-result') {
-              logger.trace(`  TOOL-RESULT: ${JSON.stringify(item).substring(0, 200)}...`);
-            }
-          });
-        } else if (typeof msg.content === 'string' && msg.content.length > 0) {
-          logger.trace(`  ${msg.content.substring(0, 300)}...`);
-        } else if (typeof msg.content === 'string' && msg.content.length === 0) {
-          logger.trace(`  [empty string]`);
-        } else if (!msg.content) {
-          logger.trace(`  [no content]`);
-        } else {
-          logger.trace(`  ${String(msg.content).substring(0, 300)}...`);
-        }
-      });
-      logger.traceSeparator();
+      const visionResult = await this.analyzePageWithVision(observation, task);
+      const visionAnalysis = visionResult.analysis;
 
-      // Get AI SDK tool definitions
-      const toolDefinitions = this.tools.getAISDKTools();
+      // Track vision tokens
+      const visionTokensThisStep = visionResult.usage.totalTokens;
+      this.visionUsage.inputTokens += visionResult.usage.inputTokens;
+      this.visionUsage.outputTokens += visionResult.usage.outputTokens;
+      this.visionUsage.totalTokens += visionResult.usage.totalTokens;
 
-      // THINK & ACT (using vision client if available)
-      const activeClient = this.visionClient || this.aiClient;
+      this.totalUsage.inputTokens += visionResult.usage.inputTokens;
+      this.totalUsage.outputTokens += visionResult.usage.outputTokens;
+      this.totalUsage.totalTokens += visionResult.usage.totalTokens;
 
-      const result = await activeClient.generate({
-        messages,
-        system: this.memory.systemPrompt,
-        tools: toolDefinitions,
-        maxSteps: 1
+      logger.debug(`Vision Analysis:\n${visionAnalysis.substring(0, 500)}${visionAnalysis.length > 500 ? '...' : ''}`);
+
+      // Store vision analysis in memory
+      this.memory.addVisionAnalysisStep({
+        stepNumber: this.stepCount,
+        analysis: visionAnalysis,
+        observation
       });
 
-      // LOG: Full LLM response
-      logger.traceHeader('LLM RESPONSE');
-      logger.trace(`Finish Reason: ${result.finishReason}`);
-      if (result.text) {
-        logger.trace(`\nThinking/Reasoning:\n${result.text}`);
-      }
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        logger.trace(`\nTool Calls (${result.toolCalls.length}):`);
-        result.toolCalls.forEach((tc, idx) => {
-          logger.trace(`  ${idx + 1}. ${tc.toolName}(${JSON.stringify(tc.args)})`);
-        });
-      }
-      logger.traceSeparator();
+      logger.debugSeparator();
 
-      // Track usage - determine if this was a vision or logic call
-      const isVisionCall = activeClient === this.visionClient;
+      // ============================================================
+      // PHASE 2: LOGIC DECISION
+      // ============================================================
 
-      let logicTokensThisStep = 0;
-      let visionTokensThisStep = 0;
+      const logicResult = await this.makeLogicDecision(
+        observation,
+        visionAnalysis,
+        task,
+        stateChanged
+      );
 
-      if (isVisionCall) {
-        visionTokensThisStep = result.usage.totalTokens;
-        this.visionUsage.inputTokens += result.usage.inputTokens;
-        this.visionUsage.outputTokens += result.usage.outputTokens;
-        this.visionUsage.totalTokens += result.usage.totalTokens;
-      } else {
-        logicTokensThisStep = result.usage.totalTokens;
-        this.logicUsage.inputTokens += result.usage.inputTokens;
-        this.logicUsage.outputTokens += result.usage.outputTokens;
-        this.logicUsage.totalTokens += result.usage.totalTokens;
-      }
+      // Track logic tokens
+      const logicTokensThisStep = logicResult.usage.totalTokens;
+      this.logicUsage.inputTokens += logicResult.usage.inputTokens;
+      this.logicUsage.outputTokens += logicResult.usage.outputTokens;
+      this.logicUsage.totalTokens += logicResult.usage.totalTokens;
 
-      this.totalUsage.inputTokens += result.usage.inputTokens;
-      this.totalUsage.outputTokens += result.usage.outputTokens;
-      this.totalUsage.totalTokens += result.usage.totalTokens;
+      this.totalUsage.inputTokens += logicResult.usage.inputTokens;
+      this.totalUsage.outputTokens += logicResult.usage.outputTokens;
+      this.totalUsage.totalTokens += logicResult.usage.totalTokens;
 
+      // Display token usage for BOTH phases
       logger.info(`Tokens - Logic: ${logicTokensThisStep} (total: ${this.logicUsage.totalTokens}) | Vision: ${visionTokensThisStep} (total: ${this.visionUsage.totalTokens})`);
+
+      const result = logicResult.result;
+
+      // ============================================================
+      // END TWO-PHASE ARCHITECTURE
+      // ============================================================
 
       // Check if done
       if (result.finishReason === 'stop' && result.text) {
@@ -301,17 +289,218 @@ export class DolosAgent {
     return finalAnswer;
   }
 
+  /**
+   * Phase 1: Vision Analysis
+   * Analyzes screenshot and returns structured text observations
+   */
+  private async analyzePageWithVision(
+    observation: BrowserState,
+    task?: string
+  ): Promise<{
+    analysis: string;
+    usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  }> {
+    // Build vision-specific prompt with action context
+    const taskContext = task ? `OVERALL TASK: ${task}\n\n` : '';
+
+    // Get recent actions for context
+    const recentActions = this.memory.getRecentActions(3);
+    const actionHistory = recentActions.length > 0
+      ? `RECENT ACTIONS TAKEN:\n${recentActions.map(a =>
+          `- Step ${a.stepNumber}: ${a.toolName}(${JSON.stringify(a.parameters)}) → ${a.result?.observation || 'completed'}`
+        ).join('\n')}\n\n`
+      : 'RECENT ACTIONS: None (first step)\n\n';
+
+    const visionPrompt = `You are a vision analysis agent helping with browser automation.
+
+${taskContext}${actionHistory}CURRENT PAGE:
+- URL: ${observation.url}
+- Title: ${observation.title}
+- Viewport: ${observation.viewportSize.width}x${observation.viewportSize.height}
+
+YOUR JOB:
+Analyze the screenshot and report FACTS about what you see. Provide coordinates for interactive elements. Do NOT provide logical reasoning - just report visual observations.
+
+Provide your analysis in this format:
+
+1. WHAT I SEE:
+   - List ALL interactive elements visible (buttons, inputs, links, text fields, etc.)
+   - For each element, provide EXACT coordinates in format: "Element name/description at (x, y)"
+   - Include current state (e.g., "Input field containing 'hello world' at (290, 60)")
+   - Example: "Search button at (640, 350)"
+
+2. WHAT CHANGED:
+   - Factual comparison: What is visually different from before the previous action?
+   - Did new elements appear? Did elements disappear? Did text change?
+   - If nothing changed visually, state: "No visual change detected"
+
+3. NEXT ACTION TARGET:
+   - Based ONLY on the task goal, identify what element needs interaction
+   - EITHER: "TASK_COMPLETE - Visual evidence: [what shows task is done]"
+   - OR: "NEXT_TARGET: [element description] at (x, y)"
+   - OR: "BLOCKER: [blocking element description] at (x, y)"
+   - Do NOT explain WHY - just identify WHAT and WHERE
+
+BE SPECIFIC with coordinates. Report observations, not interpretations.`;
+
+    const messages = [{
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: visionPrompt },
+        {
+          type: 'image' as const,
+          image: observation.screenshot,
+          mimeType: 'image/png' as const
+        }
+      ]
+    }];
+
+    logger.debug('Sending screenshot to vision model...');
+
+    // Call vision client (NO TOOLS - text only)
+    const result = await this.visionClient!.generate({
+      messages,
+      system: 'You are a visual observer for browser automation. Report FACTS about what you see in screenshots - elements, coordinates, current state, changes. Do NOT provide logical reasoning or explain "why" - that is the job of the logic agent. Your role: OBSERVE and REPORT visual information with precise coordinates.',
+      maxSteps: 1
+      // NOTE: NO tools parameter - vision model only analyzes, doesn't act
+    });
+
+    return {
+      analysis: result.text || '',
+      usage: result.usage
+    };
+  }
+
+  /**
+   * Phase 2: Logic Decision
+   * Makes tool call decisions based on vision analysis (no screenshot)
+   */
+  private async makeLogicDecision(
+    observation: BrowserState,
+    visionAnalysis: string,
+    task?: string,
+    stateChanged: boolean = true
+  ): Promise<{
+    result: any;
+    usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  }> {
+    // Build messages for logic decision
+    const messages = this.buildLogicMessages(observation, visionAnalysis, task, stateChanged);
+
+    // Get tool definitions
+    const toolDefinitions = this.tools.getAISDKTools();
+
+    logger.debugHeader('LOGIC DECISION PHASE');
+    logger.debug('Sending to logic model (with vision analysis, no screenshot)...');
+
+    // Trace: Log full prompt being sent to logic LLM
+    if (logger.getLevel() === 'trace') {
+      logger.trace('=== LOGIC LLM PROMPT ===');
+      logger.trace('System Prompt:');
+      logger.trace(this.memory.systemPrompt);
+      logger.trace('\nMessages:');
+      messages.forEach((msg, idx) => {
+        logger.trace(`\n[Message ${idx + 1}] Role: ${msg.role}`);
+        if (typeof msg.content === 'string') {
+          logger.trace(msg.content);
+        } else if (Array.isArray(msg.content)) {
+          msg.content.forEach((part: any, partIdx: number) => {
+            if (part.type === 'text') {
+              logger.trace(`  [Part ${partIdx + 1}] Text: ${part.text}`);
+            } else if (part.type === 'image') {
+              logger.trace(`  [Part ${partIdx + 1}] Image: [base64 data, ${part.image?.length || 0} chars]`);
+            } else if (part.type === 'tool-result') {
+              logger.trace(`  [Part ${partIdx + 1}] Tool Result: ${part.toolName} - ${JSON.stringify(part.result).substring(0, 200)}`);
+            }
+          });
+        }
+      });
+      logger.trace('\n=== END LOGIC LLM PROMPT ===\n');
+    }
+
+    // Call logic client (aiClient) with tools
+    const result = await this.aiClient.generate({
+      messages,
+      system: this.memory.systemPrompt,
+      tools: toolDefinitions,
+      maxSteps: 1
+    });
+
+    // Log response
+    if (result.text) {
+      logger.info(`Logic reasoning: ${result.text}`);
+    }
+    if (result.toolCalls && result.toolCalls.length > 0) {
+      logger.debug(`Tool calls: ${result.toolCalls.map(tc => `${tc.toolName}(${JSON.stringify(tc.args)})`).join(', ')}`);
+    }
+    if (!result.text && (!result.toolCalls || result.toolCalls.length === 0)) {
+      logger.debug('Logic returned no text or tool calls');
+    }
+    logger.debugSeparator();
+
+    return {
+      result,
+      usage: result.usage
+    };
+  }
+
+  /**
+   * Build messages for logic phase (Phase 2)
+   * Includes vision analysis as TEXT instead of screenshot
+   */
+  private buildLogicMessages(
+    observation: BrowserState,
+    visionAnalysis: string,
+    task?: string,
+    stateChanged: boolean = true
+  ): CoreMessage[] {
+    // Get existing message history from memory
+    const messages: CoreMessage[] = this.memory.toMessages();
+
+    // Build state change warning if applicable
+    let stateWarning = '';
+    if (!stateChanged && this.stepCount > 1) {
+      stateWarning = '\nWARNING: The page state has NOT changed since your last action. This may mean:\n' +
+        '- A chat agent is still typing/thinking\n' +
+        '- A response is loading and needs more time\n' +
+        '- Your last action had no effect\n' +
+        'The next screenshot will show if the page updates.\n\n';
+    }
+
+    // Build task reminder
+    const taskReminder = task ? `\nCURRENT TASK: ${task}\n\n` : '';
+
+    // Build current observation with VISION ANALYSIS instead of screenshot
+    const observationText = `${taskReminder}${stateWarning}Current Browser State:
+URL: ${observation.url}
+Title: ${observation.title}
+Viewport: ${observation.viewportSize.width}x${observation.viewportSize.height}
+
+VISION ANALYSIS:
+${visionAnalysis}
+
+Based on this information, what action should you take next to complete the CURRENT task?`;
+
+    // Add observation as TEXT-ONLY message (no image)
+    messages.push({
+      role: 'user',
+      content: observationText  // Simple string, not array with image
+    });
+
+    return messages;
+  }
+
   private buildMessages(observation: BrowserState, task?: string, stateChanged: boolean = true): CoreMessage[] {
     const messages: CoreMessage[] = this.memory.toMessages();
 
     // Build state change warning if applicable
     let stateWarning = '';
     if (!stateChanged && this.stepCount > 1) {
-      stateWarning = '\n⚠️  WARNING: The page state has NOT changed since your last action. This may mean:\n' +
-        '- A chat agent is still typing/thinking and you should wait\n' +
+      stateWarning = '\nWARNING: The page state has NOT changed since your last action. This may mean:\n' +
+        '- A chat agent is still typing/thinking\n' +
         '- A response is loading and needs more time\n' +
         '- Your last action had no effect\n' +
-        'Consider using the wait() tool to give the page more time to respond.\n\n';
+        'The next screenshot will show if the page updates.\n\n';
     }
 
     // Build task reminder
@@ -366,19 +555,17 @@ export class DolosAgent {
     const { createForwardTool } = await import('../tools/browser/forward.tool');
     const { createScrollTool } = await import('../tools/browser/scroll.tool');
     const { createPressKeyTool } = await import('../tools/browser/press.tool');
-    const { createWaitTool } = await import('../tools/browser/wait.tool');
     const { createDoneTool } = await import('../tools/browser/done.tool');
 
     // Register all tools with their names (coordinate-based only)
     // Wrap each tool to capture results
-    this.tools.register('click', this.wrapToolWithResultCapture('click', createClickTool(this.page)));
+    this.tools.register('click', this.wrapToolWithResultCapture('click', createClickTool(this.page, this.config.networkWait!)));
     this.tools.register('type', this.wrapToolWithResultCapture('type', createTypeTool(this.page, this.config.typingDelay!)));
-    this.tools.register('navigate', this.wrapToolWithResultCapture('navigate', createNavigateTool(this.page)));
-    this.tools.register('back', this.wrapToolWithResultCapture('back', createBackTool(this.page)));
-    this.tools.register('forward', this.wrapToolWithResultCapture('forward', createForwardTool(this.page)));
+    this.tools.register('navigate', this.wrapToolWithResultCapture('navigate', createNavigateTool(this.page, this.config.networkWait!)));
+    this.tools.register('back', this.wrapToolWithResultCapture('back', createBackTool(this.page, this.config.networkWait!)));
+    this.tools.register('forward', this.wrapToolWithResultCapture('forward', createForwardTool(this.page, this.config.networkWait!)));
     this.tools.register('scroll', this.wrapToolWithResultCapture('scroll', createScrollTool(this.page)));
-    this.tools.register('press', this.wrapToolWithResultCapture('press', createPressKeyTool(this.page)));
-    this.tools.register('wait', this.wrapToolWithResultCapture('wait', createWaitTool(this.page)));
+    this.tools.register('press', this.wrapToolWithResultCapture('press', createPressKeyTool(this.page, this.config.networkWait!)));
     this.tools.register('done', this.wrapToolWithResultCapture('done', createDoneTool(this.page)));
 
     logger.debug(`Registered ${this.tools.list().length} browser tools`);

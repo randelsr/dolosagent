@@ -19,6 +19,7 @@ export interface AgentConfig {
   maxSteps?: number;
   planningInterval?: number;
   typingDelay?: number; // Milliseconds between keystrokes (default: 50)
+  networkWait?: number; // Milliseconds to wait after network-triggering actions (default: 2000)
   verbosity?: VerbosityLevel; // Logging verbosity level (default: 'info')
 
   // Browser settings

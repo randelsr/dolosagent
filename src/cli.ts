@@ -33,6 +33,7 @@ program
   .option('--max-steps <number>', 'Maximum ReAct steps', process.env.DEFAULT_MAX_STEPS || '50')
   .option('--planning-interval <number>', 'Planning interval', process.env.DEFAULT_PLANNING_INTERVAL || '5')
   .option('--typing-delay <number>', 'Milliseconds between keystrokes', process.env.DEFAULT_TYPING_DELAY || '50')
+  .option('--network-wait <number>', 'Milliseconds to wait after network-triggering actions', process.env.DEFAULT_NETWORK_WAIT || '2000')
   .option('--verbosity <level>', 'Logging verbosity (error|warn|info|debug|trace)', process.env.DEFAULT_VERBOSITY || 'info')
   .option('--headless', 'Run browser in headless mode', false)
   .action(async (options) => {
@@ -40,7 +41,7 @@ program
       // Validate API key
       const apiKey = getApiKey(options.provider);
       if (!apiKey) {
-        console.error(`❌ Error: ${options.provider.toUpperCase()}_API_KEY not set`);
+        console.error(`Error: ${options.provider.toUpperCase()}_API_KEY not set`);
         console.error('Please set the API key in your .env file');
         process.exit(1);
       }
@@ -53,6 +54,7 @@ program
         maxSteps: parseInt(options.maxSteps),
         planningInterval: parseInt(options.planningInterval),
         typingDelay: parseInt(options.typingDelay),
+        networkWait: parseInt(options.networkWait),
         verbosity: options.verbosity
       };
 
@@ -73,7 +75,7 @@ program
       const result = await agent.run(options.task, options.url);
 
       console.log('\n' + '='.repeat(60));
-      console.log('✅ Task Complete');
+      console.log('Task Complete');
       console.log('='.repeat(60));
       console.log(result);
       console.log('='.repeat(60) + '\n');
@@ -81,7 +83,7 @@ program
       await agent.close();
       process.exit(0);
     } catch (error: any) {
-      console.error('\n❌ Error:', error.message);
+      console.error('\nError:', error.message);
       process.exit(1);
     }
   });
@@ -99,6 +101,7 @@ program
   .option('--max-steps <number>', 'Maximum ReAct steps per task', process.env.DEFAULT_MAX_STEPS || '50')
   .option('--planning-interval <number>', 'Planning interval', process.env.DEFAULT_PLANNING_INTERVAL || '5')
   .option('--typing-delay <number>', 'Milliseconds between keystrokes', process.env.DEFAULT_TYPING_DELAY || '50')
+  .option('--network-wait <number>', 'Milliseconds to wait after network-triggering actions', process.env.DEFAULT_NETWORK_WAIT || '2000')
   .option('--verbosity <level>', 'Logging verbosity (error|warn|info|debug|trace)', process.env.DEFAULT_VERBOSITY || 'info')
   .option('--headless', 'Run browser in headless mode', false)
   .action(async (options) => {
@@ -106,7 +109,7 @@ program
       // Validate API key
       const apiKey = getApiKey(options.provider);
       if (!apiKey) {
-        console.error(`❌ Error: ${options.provider.toUpperCase()}_API_KEY not set`);
+        console.error(`Error: ${options.provider.toUpperCase()}_API_KEY not set`);
         console.error('Please set the API key in your .env file');
         process.exit(1);
       }
@@ -119,6 +122,7 @@ program
         maxSteps: parseInt(options.maxSteps),
         planningInterval: parseInt(options.planningInterval),
         typingDelay: parseInt(options.typingDelay),
+        networkWait: parseInt(options.networkWait),
         verbosity: options.verbosity
       };
 
@@ -138,7 +142,7 @@ program
 
       process.exit(0);
     } catch (error: any) {
-      console.error('\n❌ Error:', error.message);
+      console.error('\nError:', error.message);
       process.exit(1);
     }
   });
@@ -163,7 +167,7 @@ program
       return;
     }
 
-    console.log('\n📝 Available Example Prompts:\n');
+    console.log('\nAvailable Example Prompts:\n');
     files.forEach(file => {
       const name = file.replace('.txt', '');
       const content = fs.readFileSync(path.join(promptsDir, file), 'utf-8');

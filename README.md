@@ -46,14 +46,14 @@ dolos run \
 ```bash
 dolos chat --provider anthropic --model claude-sonnet-4-20250514
 
-👤 You: navigate to salesforce.com
-🤖 Navigated to salesforce.com
+You: navigate to salesforce.com
+Agent: Navigated to salesforce.com
 
-👤 You: click the ask agentforce button
-🤖 Clicked button and chat opened
+You: click the ask agentforce button
+Agent: Clicked button and chat opened
 
-👤 You: type "hello world" and press enter
-🤖 Typed message and sent
+You: type "hello world" and press enter
+Agent: Typed message and sent
 ```
 
 ## Configuration
@@ -74,8 +74,9 @@ DEFAULT_IMAGE_MODEL=gemini-2.0-flash-exp
 # Agent Behavior
 DEFAULT_MAX_STEPS=50
 DEFAULT_PLANNING_INTERVAL=5
-DEFAULT_TYPING_DELAY=50     # milliseconds between keystrokes
-DEFAULT_VERBOSITY=info      # error, warn, info, debug, trace
+DEFAULT_TYPING_DELAY=50      # milliseconds between keystrokes
+DEFAULT_NETWORK_WAIT=2000    # milliseconds to wait after network-triggering actions
+DEFAULT_VERBOSITY=info       # error, warn, info, debug, trace
 ```
 
 ### CLI Options
@@ -89,6 +90,7 @@ DEFAULT_VERBOSITY=info      # error, warn, info, debug, trace
 --max-steps <number>           Maximum steps (default: 50)
 --planning-interval <number>   Planning frequency (default: 5)
 --typing-delay <number>        Typing delay in ms (default: 50)
+--network-wait <number>        Network wait in ms (default: 2000)
 --verbosity <level>            Logging verbosity (error|warn|info|debug|trace)
 --headless                     Run browser headless
 ```
@@ -129,10 +131,9 @@ Output is color-coded for readability:
 - `back()` - Browser back button
 - `forward()` - Browser forward button
 - `click(x, y)` - Click at coordinates
-- `type(x, y, text)` - Type text (use `\n` for Enter)
-- `press(key)` - Press keyboard key
+- `type(x, y, text)` - Type text only (no special keys)
+- `press(key)` - Press keyboard key (Enter, Tab, Escape, etc.)
 - `scroll(direction)` - Scroll up/down/left/right
-- `wait(duration)` - Wait milliseconds
 - `done(result)` - Complete task
 
 ### Planning System
@@ -148,15 +149,18 @@ Includes full action history with results for context.
 ### State Change Detection
 Detects when page hasn't changed after an action:
 ```
-⏳ Page state unchanged - may be waiting for response...
-⚠️  WARNING: The page state has NOT changed since your last action.
-Consider using wait() to give the page more time to respond.
+WARNING: The page state has NOT changed since your last action.
+This may mean:
+- A chat agent is still typing/thinking
+- A response is loading and needs more time
+- Your last action had no effect
+The next screenshot will show if the page updates.
 ```
 
 ### Loop Detection
 Prevents repeated actions at similar coordinates:
 ```
-⚠️ LOOP DETECTED: Repeated click 3 times. Try a different approach!
+LOOP DETECTED: Repeated click 3 times. Try a different approach!
 ```
 
 ## Verbosity & Debugging
@@ -165,28 +169,31 @@ Full transparency into agent decisions:
 
 **Screenshot Capture:**
 ```
-📸 CAPTURING PAGE STATE
-✓ Screenshot captured: 245678 bytes
-✓ Found 74 interactive elements (62 visible)
+CAPTURING PAGE STATE
+Screenshot captured: 245678 bytes
+Found 74 interactive elements (62 visible)
 Top 10 visible elements:
   1. button at (850, 40) - "Ask Agentforce"
 ```
 
-**LLM Prompt:**
+**Vision Analysis:**
 ```
-📤 SENDING TO LLM
-SYSTEM PROMPT: You are an intelligent browser automation agent...
-USER MESSAGES:
-  🎯 CURRENT TASK: click on ask agentforce button
-  Current Browser State: [62 visible elements]
-  IMAGE: [base64 screenshot, 327571 bytes]
+VISION ANALYSIS PHASE
+Sending screenshot to vision model...
+1. WHAT I SEE:
+   - Ask Agentforce button at (850, 40)
+   - Search field at (500, 100)
+...
+3. NEXT ACTION TARGET:
+   NEXT_TARGET: Ask Agentforce button at (850, 40)
 ```
 
-**LLM Response:**
+**Logic Decision:**
 ```
-📥 LLM RESPONSE
-Thinking/Reasoning: I can see the button at (850, 40)...
-Tool Calls: click({"x":850,"y":40})
+LOGIC DECISION PHASE
+Logic reasoning: The vision analysis identified the Ask Agentforce button
+at coordinates (850, 40). I should click it to proceed.
+Tool calls: click({"x":850,"y":40})
 ```
 
 ## Recommended Models
@@ -257,6 +264,32 @@ npx playwright install chromium
 3. **Tool Results in Planning** - Full context for decision-making
 4. **State Change Awareness** - Knows when to wait
 5. **Human-Like Behavior** - Typing delays, visual markers
+
+## Future Improvements
+
+### Intelligent Page State Detection
+**Current Approach:** Fixed timeout after actions (e.g., 2000ms after click/press)
+
+**Problem:** Modern web apps use streaming responses (WebSockets, Server-Sent Events) and dynamic content loading that continue beyond fixed timeouts. Screenshots may capture loading states instead of final content.
+
+**Observed Issue:** AI chat interfaces (e.g., Salesforce Agentforce) stream responses over WebSocket connections. Fixed timeouts capture "typing..." indicators and incomplete responses.
+
+**Potential Solutions:**
+1. **WebSocket Monitoring** - Track WebSocket frame activity using Playwright's `page.on('websocket')` events
+2. **Loading Indicator Detection** - Wait for visual indicators to disappear (spinners, "typing...", skeleton loaders)
+3. **Text Stability Detection** - Monitor DOM text content and wait for stabilization period
+4. **Hybrid Approach** - Combine DOM mutation observer + WebSocket tracking + visual indicator detection
+
+**Implementation Complexity:** Medium-High
+- Requires different strategies per application type
+- Need to balance wait time vs. responsiveness
+- Risk of false positives (page appears stable but still loading)
+
+**Trade-offs:**
+- Fixed timeout: Fast but may miss content
+- Smart detection: More reliable but slower and complex
+
+**Reference:** See deleted `src/tools/helpers/smart-wait.ts` for initial DOM mutation + fetch tracking implementation (insufficient for WebSocket/streaming)
 
 ## License
 
